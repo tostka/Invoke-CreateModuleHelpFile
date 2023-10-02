@@ -31,20 +31,21 @@ function Convert-HelpToHtmlFile {
     expanded CBH; put into OTB & advanced function format; split trycatch into beg & proc blocks
     10/18/2014 OK's posted rev 1.1
     .DESCRIPTION
-    Convert-HelpToHtmlFile.ps1 - Create a HTML help file for a PowerShell module.
-    This function will generate a full HTML help file for all commands in a PowerShell module.
+    Convert-HelpToHtmlFile.ps1 - Create a HTML help file for a PowerShell module or script.
+    For modules, generates a full HTML help file for all commands in the module.
+    For scripts it generates same for the script's CBH content. 
 
     This function is dependent on jquery, the bootstrap framework and the jasny bootstrap add-on.
-
+    Also relies on my verb-dev:get-HelpParsed() to parse script CBH into rough equivelent's of get-module metadata outputs.
 
     .PARAMETER CodeObject
-    Name of module. Note! The module must be imported before running this function[-CodeObject myMod]
+    Name of module or script. [-CodeObject myMod]
     .PARAMETER Destination
-    Full path and filename to the generated html helpfile[-Destination c:\pathto\MyModuleHelp.html]
+    Directoy into which 'genericly-named output files should be written, or the full path to a specified output file[-Destination c:\pathto\MyModuleHelp.html]
     .PARAMETER SkipDependencyCheck
     Skip dependency check[-SkipDependencyCheck] 
     .PARAMETER Script
-    Switch for processing target Script files (vs Modules)[-Script]
+    Switch for processing target Script files (vs Modules, overrides natural blocks on processing scripts)[-Script]
     .PARAMETER MarkdownHelp
     Switch to use PlatyPS to output markdown help variants[-MarkdownHelp]
     .PARAMETER NoPreview
