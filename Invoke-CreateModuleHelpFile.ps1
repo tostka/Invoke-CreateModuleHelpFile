@@ -18,6 +18,12 @@ function Invoke-CreateModuleHelpFile {
     AddedWebsite: https://communary.net/
     AddedTwitter: @okallstad / https://twitter.com/okallstad
     REVISIONS
+    * 2:15 PM 10/2/2023 Moving this into verb-dev, no reason it should sit in it's own repo (renaming Invoke-CreateModuleHelpFile -> Convert-HelpToHtmlFile) ; 
+    ren & alias ModuleName -> CodeObject ;
+    Rounded out -script/non-module support by splicing in my verb-dev:get-HelpParsed() which parses the CBH content (via get-help) and returns metadata I routinely populate in the Notes CBH block.
+    This provided more details to use in the resulting output html, to make it *closer* to the native module data; 
+    Also updated html output - wasn't displaying key:value side by side, so I spliced in prehistoric html tables to force them into adjacency
+    And finally fixed the NOTES CBH output, expanding the line return -><br> replacements to cover three different line return variant formats: Notes now comes out as a properly line-returned block, similar to the CBH appearance in the source script.
     * 9:17 AM 9/29/2023 rewrote to support conversion for scripts as well; added 
     -script & -nopreview params (as it now also auto-previews in default browser);  
     ould be to move the html building code into a function, and leave the module /v script logic external to that common process.
@@ -30,8 +36,8 @@ function Invoke-CreateModuleHelpFile {
     This function is dependent on jquery, the bootstrap framework and the jasny bootstrap add-on.
 
 
-    .PARAMETER ModuleName
-    Name of module. Note! The module must be imported before running this function[-ModuleName myMod]
+    .PARAMETER CodeObject
+    Name of module. Note! The module must be imported before running this function[-CodeObject myMod]
     .PARAMETER Destination
     Full path and filename to the generated html helpfile[-Destination c:\pathto\MyModuleHelp.html]
     .PARAMETER SkipDependencyCheck
@@ -49,10 +55,10 @@ function Invoke-CreateModuleHelpFile {
     System.Boolean
     [| get-member the output to see what .NET obj TypeName is returned, to use here]
     .EXAMPLE
-    PS> Invoke-CreateModuleHelpFile -ModuleName 'verb-text' -Dest 'c:\temp\verb-text_HLP.html' -verbose ; 
+    PS> Invoke-CreateModuleHelpFile -CodeObject 'verb-text' -Dest 'c:\temp\verb-text_HLP.html' -verbose ; 
     Generate Html Help file for 'verb-text' module and save it as 'c:\temp\verb-text_HLP.html' with verbose output.
     .EXAMPLE
-    PS> Invoke-CreateModuleHelpFile -ModuleName 'c:\usr\work\ps\scripts\move-ConvertedVidFiles.ps1' -Script -Dest 'c:\temp\'  -verbose ; 
+    PS> Invoke-CreateModuleHelpFile -CodeObject 'c:\usr\work\ps\scripts\move-ConvertedVidFiles.ps1' -Script -destination 'c:\temp\'  -verbose ; 
     Generate Html Help file for the 'move-ConvertedVidFiles.ps1' script and save it as with a generated default name (move-ConvertedVidFiles_HELP.html) to the 'c:\temp\' directory with verbose output.
     EXDESCRIPTION
     .LINK
@@ -65,9 +71,10 @@ function Invoke-CreateModuleHelpFile {
     [CmdletBinding()]
     PARAM(
         # Name of module. Note! The module must be imported before running this function.
-        [Parameter(Mandatory = $true,HelpMessage="Name of module. Note! The module must be imported before running this function[-ModuleName myMod]")]
+        [Parameter(Mandatory = $true,HelpMessage="Name of module. Note! The module must be imported before running this function[-CodeObject myMod]")]
             [ValidateNotNullOrEmpty()]
-            [string] $ModuleName,
+            [Alias('ModuleName','Name')]
+            [string] $CodeObject,
         # Full path and filename to the generated html helpfile.
         [Parameter(Mandatory = $true,HelpMessage="Full path and filename to the generated html helpfile[-Path c:\pathto\MyModuleHelp.html]")]
             [ValidateScript({Test-Path $_ })]
@@ -181,7 +188,7 @@ function Invoke-CreateModuleHelpFile {
     PROCESS {
         $Error.Clear() ; 
     
-        foreach($ModName in $ModuleName) {
+        foreach($ModName in $CodeObject) {
             $smsg = $sBnrS="`n#*------v PROCESSING : $($ModName) v------" ; 
             if($Script){
                 $smsg = $smsg.replace(" v------", " (PS1 scriptfile) v------")
@@ -191,14 +198,33 @@ function Invoke-CreateModuleHelpFile {
             if($Script){
                 TRY{
                     $gcmInfo = get-command -Name $ModName -ea STOP ;
+                    # post convert after finished adding keys
+                    #$moduleData = [ordered]@{
                     $moduleData = [pscustomobject]@{
                         #Name = $gcminfo.name ; 
                         Name = $gcminfo.Source ; 
-                    } ;
+                        description = $null ;  
+                        ModuleBase = $null ; 
+                        # $moduleData.Version is semversion, not something I generally keep updated in CBH
+                        Version = $null ; 
+                        Author = $null ; 
+                        CompanyName = $null ; 
+                        Copyright = $null ; 
+                    } ; 
+                        
                 } CATCH {
                     Write-Warning $_.Exception.Message ;
                     Continue ; 
                 } ;  
+
+                if(-not (get-command get-HelpParsed -ea STOP)){
+                    $smsg = "-Script specified & unable to GCM get-HelpParsed!" ; 
+                    $smsg += "`noutput html will lack details that are normally parsed from metadata I store in the CBH NOTES in the target script" ; 
+                    if ($logging) { Write-Log -LogContent $smsg -Path $logfile -useHost -Level WARN -Indent} 
+                    else{ write-WARNING "$((get-date).ToString('HH:mm:ss')):$($smsg)" } ; 
+                } else {
+                    $CBHParsedHelp = get-HelpParsed -Path $gcminfo.source -verbose:$VerbosePreference ; 
+                } ; 
             } else { 
                 # 9:51 AM 9/29/2023 silly, try to find & forceload the mod:
                  # try to get module info from imported modules first
@@ -212,7 +238,7 @@ function Invoke-CreateModuleHelpFile {
                 if( (split-path $modName -ea 0) -OR ([uri]$modName).isfile){
                     # pathed module, this will throw an error in gmo and exit
                     # or string that evalutes as a uri IsFile
-                    $smsg = "specified -ModuleName $($modname) is a pathed specification,"
+                    $smsg = "specified -CodeObject $($modname) is a pathed specification,"
                     $smsg += "`nand -Script parameter *has not been specified*!" ;
                     $smsg += "`nget-module will *refuse* to execute against a pathed Module -Name specification, and will abort this script!"
                     $smsg += "`nif the intent is to process a _script_, rather than a module, please include the -script parameter!" ; 
@@ -231,26 +257,57 @@ function Invoke-CreateModuleHelpFile {
                     # *better! does it have an extension!
                     # insufficient, periods are permitted in module names (MS powershell modules frequently are dot-delimtied fq names).
                     # just in case do a gcm and check for result.source value
-                    if((get-command -Name $modName -ea 0).source){
+                    # test the .psd1, if it's derivable from the gmo, this is a module, not a script
+                    
+                    if(($xgcm = get-command -Name $modName -ea 0).source){
                         # it's possible to have scripts with same name as modules
                         # and in most cases modules should have .psm1 extension
                         # tho my old back-load module copies were named .ps1
                         # check for path-hosted file with gcm on the name
-                        if($xgcm = get-command $modName -ea 0 ){
-                            # then check if the file's extension is .ps1, and hard block any work with it
-                            if( (get-childitem -path $xgcm.source).extension -eq '.ps1'){
-                                $smsg = "specified -ModuleName $($modname) resolves to a pathed .ps1 file, and -Script parameter *has not been specified*!" ;
+                        # below false-positives against the uwes back-load module fallbacks. (which are named verb-xxx.ps1). 
+                        # then check if the file's extension is .ps1, and hard block any work with it
+
+                        if($LModData = get-Module -Name $ModName -ListAvailable -ErrorAction Stop){
+                            if($LModData.path.replace('.psm1','.psd1') | Test-ModuleManifest -ErrorAction STOP ){
+                                $smsg = "specified module has a like-named script in the path" ; 
+                                $smsg += "`n$($xgcm.source)" ; 
+                                $smsg += "`nbut successfully gmo resolves to, and passes, a manifest using Test-ModuleManifest" ; 
+                                $smsg += "`nmoving on with conversion..." ; 
+                                if ($logging) { Write-Log -LogContent $smsg -Path $logfile -useHost -Level Info } 
+                                else{ write-host -foregroundcolor green "$((get-date).ToString('HH:mm:ss')):$($smsg)" } ;
+                                #Levels:Error|Warn|Info|H1|H2|H3|H4|H5|Debug|Verbose|Prompt|Success
+                            }elseif((get-childitem -path $xgcm.source).extension -eq '.ps1'){
+                                $smsg = "specified -CodeObject $($modname) resolves to a pathed .ps1 file, and -Script parameter *has not been specified*!" ;
                                 $smsg += "`nto avoid risk of ipmo'ing scripts (which will execute them, rather than load a target module), this item is being skipped" ; 
                                 $smsg += "`nif the intent is to process a _script_, rather than a module, please include the -script parameter when using this specification!" ; 
                                 write-warning $smsg ; 
                                 throw $smsg ; 
                                 Continue ; 
-                            } else { 
-
-                            } ; 
-                        } else { 
-                            
+                            } ;
                         } ; 
+                        <#
+                        if($LmoduleData = Get-Module -Name $ModName -ErrorAction Stop){
+                            if( $ModuleData.path.replace('.psm1','.psd1') | Test-ModuleManifest -ErrorAction STOP ){
+                            $smsg = "specified module has a like-named script in the path" ; 
+                            $smsg += "`n($xgcm.source" ; 
+                            $smsg += "`nbut successfully resolves to and passes a manifest using Test-ModuleManifest" ; 
+                            $smsg += "`nmoving on with conversion..." ; 
+                            if ($logging) { Write-Log -LogContent $smsg -Path $logfile -useHost -Level Info } 
+                            else{ write-host -foregroundcolor green "$((get-date).ToString('HH:mm:ss')):$($smsg)" } ;
+                            #Levels:Error|Warn|Info|H1|H2|H3|H4|H5|Debug|Verbose|Prompt|Success
+
+                        }elseif( (get-childitem -path $xgcm.source).extension -eq '.ps1'){
+                            $smsg = "specified -CodeObject $($modname) resolves to a pathed .ps1 file, and -Script parameter *has not been specified*!" ;
+                            $smsg += "`nto avoid risk of ipmo'ing scripts (which will execute them, rather than load a target module), this item is being skipped" ; 
+                            $smsg += "`nif the intent is to process a _script_, rather than a module, please include the -script parameter when using this specification!" ; 
+                            write-warning $smsg ; 
+                            throw $smsg ; 
+                            Continue ; 
+                        } else { 
+
+                        } ; 
+                        #>
+
                     } ; 
                 }
                 if($moduleData = Get-Module -Name $ModName -ErrorAction Stop){} else { 
@@ -279,6 +336,38 @@ function Invoke-CreateModuleHelpFile {
                 # abort if return type is wrong
                 #if(($moduleData.GetType()).Name -ne 'PSModuleInfo') {
                 if($Script){
+                    <# data that is pop'd for a module
+                        $([System.Web.HttpUtility]::HtmlEncode($moduleData.Description))<br>
+                        $([System.Web.HttpUtility]::HtmlEncode($moduleData.ModuleBase))<br>
+                        $([System.Web.HttpUtility]::HtmlEncode($moduleData.Version))<br>
+                        $([System.Web.HttpUtility]::HtmlEncode($moduleData.Author))<br>
+                        $([System.Web.HttpUtility]::HtmlEncode($moduleData.CompanyName))<br>
+                        $([System.Web.HttpUtility]::HtmlEncode($moduleData.Copyright))
+
+                        $MODDATA | FL 'Description','ModuleBase','Version','Author','CompanyName','Copyright'
+                        Description : Powershell Input/Output generic functions module
+                        ModuleBase  : C:\Users\kadrits\OneDrive - The Toro Company\Documents\WindowsPowerShell\Modules\verb-IO\11.0.1
+                        Version     : 11.0.1
+                        Author      : Todd Kadrie
+                        CompanyName : toddomation.com
+                        Copyright   : (c) 2020 Todd Kadrie. All rights reserved.
+                        
+                        We can harvest a lot out of CBH
+                        $ret = get-commentblocks -Path C:\usr\work\ps\scripts\move-ConvertedVidFiles.ps1
+                        $ret.cbhblock ; 
+                        Need to parse the .[keyword]`ninfor combos 
+                    #>
+                    if($CBHParsedHelp){
+                        if($CBHParsedHelp.HelpParsed.description){$ModuleData.description = $CBHParsedHelp.HelpParsed.description  | out-string } ; 
+                        if($gcminfo.Source){$ModuleData.ModuleBase = $gcminfo.Source  | out-string }
+                        # $moduleData.Version is semversion, not something I generally keep updated in CBH
+                        #Author
+                        if($CBHParsedHelp.NotesHash.author){$ModuleData.Author = $CBHParsedHelp.NotesHash.author  | out-string } ; 
+                        #CompanyName
+                        if($CBHParsedHelp.NotesHash.CompanyName){$ModuleData.CompanyName = $CBHParsedHelp.NotesHash.CompanyName  | out-string } ; 
+                        #Copyright
+                        if($CBHParsedHelp.NotesHash.Copyright){$ModuleData.Copyright = $CBHParsedHelp.NotesHash.Copyright  | out-string } ; 
+                    } ; 
                     if($gcminfo.CommandType -eq 'ExternalScript'){
                         $moduleCommands = $gcminfo.source ; 
                     }else {
@@ -350,6 +439,9 @@ function Invoke-CreateModuleHelpFile {
                 } ; 
 
                 # finishing up the menu and starting on the main content
+
+
+                <# orig, no table, the metadata didn't line up with the fields
                 $html += @"
         <li><a class="back-to-top" href="#top"><small>Back to top</small></a></li>
       </ul>
@@ -385,6 +477,42 @@ function Invoke-CreateModuleHelpFile {
             $([System.Web.HttpUtility]::HtmlEncode($moduleData.Copyright))
           </div>
         </div>
+        <br>
+        <!-- End About -->
+
+"@ ; 
+#>
+
+                # subbed the above into a table that puts them in key:value
+                $html += @"
+        <li><a class="back-to-top" href="#top"><small>Back to top</small></a></li>
+      </ul>
+    </nav>
+    </div>
+    <div class="navbar navbar-default navbar-fixed-top hidden-md hidden-lg hidden-print">
+      <button type="button" class="navbar-toggle" data-toggle="offcanvas" data-target=".navmenu">
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+      </button>
+      <a class="navbar-brand" href="#">$($ModName)</a>
+    </div>
+    <div class="container">
+      <div class="page-content">
+        <!-- About $($ModName) -->
+        <h1 id="About" class="page-header">About $($ModName)</h1>
+        <br>
+        <table border="0" cellpadding="3" cellspacing="3">
+        <tbody>
+        <tr><td>Description</td><td>$([System.Web.HttpUtility]::HtmlEncode($moduleData.Description))</td></tr>
+        <tr><td>ModuleBase</td><td>$([System.Web.HttpUtility]::HtmlEncode($moduleData.ModuleBase))</td></tr>
+        <tr><td>Version</td><td>$([System.Web.HttpUtility]::HtmlEncode($moduleData.Version))</td></tr>
+        <tr><td>Author</td><td>$([System.Web.HttpUtility]::HtmlEncode($moduleData.Author))</td></tr>
+        <tr><td>CompanyName</td><td>$([System.Web.HttpUtility]::HtmlEncode($moduleData.CompanyName))</td></tr>
+        <tr><td>Copyright</td><td>$([System.Web.HttpUtility]::HtmlEncode($moduleData.Copyright))</td></tr>
+        </tbody>
+        </table>
+
         <br>
         <!-- End About -->
 
@@ -488,11 +616,26 @@ function Invoke-CreateModuleHelpFile {
 "@ ; 
                     } ; 
 
+                    <# orig, notes were unwrapped
                     $html += @"
             <h3 id="$($command)-RelatedLinks">RelatedLinks</h3>
             <p><a href="$([System.Web.HttpUtility]::HtmlEncode($commandHelp.relatedLinks.navigationLink.uri -join ''))">$([System.Web.HttpUtility]::HtmlEncode($commandHelp.relatedLinks.navigationLink.uri -join ''))</a></p>
             <h3 id="$($command)-Notes">Notes</h3>
             <p>$([System.Web.HttpUtility]::HtmlEncode($commandHelp.alertSet.alert.text -join [System.Environment]::NewLine) -replace([System.Environment]::NewLine, '<br>'))</p>
+            <br>
+          </div>
+        </div>
+        <!-- End ConvertFrom-HexIP -->
+
+"@ ; 
+#>
+
+                    # notes/.alertSet.alert.text is one big unwrapped block the line wrap above isn't working 
+                    $html += @"
+            <h3 id="$($command)-RelatedLinks">RelatedLinks</h3>
+            <p><a href="$([System.Web.HttpUtility]::HtmlEncode($commandHelp.relatedLinks.navigationLink.uri -join ''))">$([System.Web.HttpUtility]::HtmlEncode($commandHelp.relatedLinks.navigationLink.uri -join ''))</a></p>
+            <h3 id="$($command)-Notes">Notes</h3>
+            <p>$([System.Web.HttpUtility]::HtmlEncode($commandHelp.alertSet.alert.text -join [System.Environment]::NewLine) -replace([system.environment]::newLine, '<br>') -replace("`r`n",'<br>') -replace("`r",'<br>') -replace("`n",'<br>')))</p>
             <br>
           </div>
         </div>
