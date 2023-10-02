@@ -18,7 +18,8 @@ function Convert-HelpToHtmlFile {
     AddedWebsite: https://communary.net/
     AddedTwitter: @okallstad / https://twitter.com/okallstad
     REVISIONS
-    * 2:15 PM 10/2/2023 Moving this into verb-dev, no reason it should sit in it's own repo (renaming Invoke-CreateModuleHelpFile -> Convert-HelpToHtmlFile) ; 
+    * 3:58 PM 10/2/2023 added -MarkdownHelp and simple call branching each commandlet process into plattyps to output quick markdown .md files in the parent dir of -Destination ; 
+    Moving this into verb-dev, no reason it should sit in it's own repo (renaming Invoke-CreateModuleHelpFile -> Convert-HelpToHtmlFile) ; 
     ren & alias ModuleName -> CodeObject ;
     Rounded out -script/non-module support by splicing in my verb-dev:get-HelpParsed() which parses the CBH content (via get-help) and returns metadata I routinely populate in the Notes CBH block.
     This provided more details to use in the resulting output html, to make it *closer* to the native module data; 
@@ -44,6 +45,8 @@ function Convert-HelpToHtmlFile {
     Skip dependency check[-SkipDependencyCheck] 
     .PARAMETER Script
     Switch for processing target Script files (vs Modules)[-Script]
+    .PARAMETER MarkdownHelp
+    Switch to use PlatyPS to output markdown help variants[-MarkdownHelp]
     .PARAMETER NoPreview
     Switch to suppress trailing preview of html in default browser[-NoPreview]
     .PARAMETER whatIf
@@ -84,6 +87,8 @@ function Convert-HelpToHtmlFile {
             [switch] $SkipDependencyCheck,
         [Parameter(HelpMessage="Switch for processing target Script files (vs Modules)[-Script]")]
             [switch] $Script,
+        [Parameter(HelpMessage="Switch to use PlatyPS to output markdown help variants[-MarkdownHelp]")]
+            [switch]$MarkdownHelp,
         [Parameter(HelpMessage="Switch to suppress trailing preview of html in default browser[-NoPreview]")]
             [switch] $NoPreview
     ) ; 
@@ -185,6 +190,15 @@ function Convert-HelpToHtmlFile {
         } CATCH {
             Write-Warning $_.Exception.Message ; 
         } ; 
+
+        if($MarkdownHelp){
+            TRY{Import-Module platyPS -ea STOP} CATCH {
+                $ErrTrapd=$Error[0] ;
+                $smsg = "`n$(($ErrTrapd | fl * -Force|out-string).trim())" ;
+                write-warning "$((get-date).ToString('HH:mm:ss')):$($smsg)" ;
+            } ; 
+        } ; 
+
     }  ;  # BEG-E
     PROCESS {
         $Error.Clear() ; 
@@ -195,6 +209,43 @@ function Convert-HelpToHtmlFile {
                 $smsg = $smsg.replace(" v------", " (PS1 scriptfile) v------")
             } ; 
             write-host -foregroundcolor green "$((get-date).ToString('HH:mm:ss')):$($smsg)" ;
+
+            # if $modName is pathed, split it to the leaf
+            if( (split-path $modName -ea 0) -OR ([uri]$modName).isfile){
+                write-verbose "converting pathed $($modname) to leaf..." ; 
+                #$leafFilename = split-path $modname -leaf ; 
+                $leaffilename = (get-childitem -path $modname).basename ; 
+            } else {
+                $leafFilename = $modname ; 
+            }; 
+
+            #if(test-path -path $Destination -PathType container -ErrorAction SilentlyContinue){
+            # test-path has a registry differentiating issue, safer to use gi!
+            if( (get-item -path $Destination -ea 0).PSIsContainer){
+                $smsg = "-Destination specified - $($Destination) - is a container" ; 
+                $smsg += "`nconstructing output file as 'Name' $($leafFilename )_HELP.html..." ; 
+                write-host -ForegroundColor Yellow $smsg ; 
+                [System.IO.DirectoryInfo[]]$Destination = $Destination ; 
+                [system.io.fileinfo]$ofile = join-path -path $Destination.fullname -ChildPath "$($leafFilename)_HELP.html" ; 
+                $outMD = split-path $ofile ; 
+            }elseif( -not (get-item -path $Destination -ea 0).PSIsContainer){
+                [system.io.fileinfo]$Destination = $Destination ; 
+                if($Destination.extension -eq '.html'){
+                    [system.io.fileinfo]$ofile = $Destination ; 
+                    $outMD = split-path $ofile ; 
+                } else { 
+                    throw "$($Destination) does *not* appear to have a suitable extension (.html):$($Destination.extension)" ; 
+                } ; 
+            } else{
+                # not an existing dir (target) & not an existing file, so treat it as a full path
+                if($Destination.extension -eq 'html'){
+                    [system.io.fileinfo]$ofile = $Destination ; 
+                    $outMD = split-path $ofile ; 
+                } else { 
+                    throw "$($Destination) does *not* appear to have a suitable extension (.html):$($Destination.extension)" ; 
+                } ; 
+            } ; 
+            write-host -ForegroundColor Yellow "Out-File -FilePath $($Ofile) -Encoding 'UTF8'" ; 
 
             if($Script){
                 TRY{
@@ -286,28 +337,6 @@ function Convert-HelpToHtmlFile {
                                 Continue ; 
                             } ;
                         } ; 
-                        <#
-                        if($LmoduleData = Get-Module -Name $ModName -ErrorAction Stop){
-                            if( $ModuleData.path.replace('.psm1','.psd1') | Test-ModuleManifest -ErrorAction STOP ){
-                            $smsg = "specified module has a like-named script in the path" ; 
-                            $smsg += "`n($xgcm.source" ; 
-                            $smsg += "`nbut successfully resolves to and passes a manifest using Test-ModuleManifest" ; 
-                            $smsg += "`nmoving on with conversion..." ; 
-                            if ($logging) { Write-Log -LogContent $smsg -Path $logfile -useHost -Level Info } 
-                            else{ write-host -foregroundcolor green "$((get-date).ToString('HH:mm:ss')):$($smsg)" } ;
-                            #Levels:Error|Warn|Info|H1|H2|H3|H4|H5|Debug|Verbose|Prompt|Success
-
-                        }elseif( (get-childitem -path $xgcm.source).extension -eq '.ps1'){
-                            $smsg = "specified -CodeObject $($modname) resolves to a pathed .ps1 file, and -Script parameter *has not been specified*!" ;
-                            $smsg += "`nto avoid risk of ipmo'ing scripts (which will execute them, rather than load a target module), this item is being skipped" ; 
-                            $smsg += "`nif the intent is to process a _script_, rather than a module, please include the -script parameter when using this specification!" ; 
-                            write-warning $smsg ; 
-                            throw $smsg ; 
-                            Continue ; 
-                        } else { 
-
-                        } ; 
-                        #>
 
                     } ; 
                 }
@@ -441,49 +470,7 @@ function Convert-HelpToHtmlFile {
 
                 # finishing up the menu and starting on the main content
 
-
-                <# orig, no table, the metadata didn't line up with the fields
-                $html += @"
-        <li><a class="back-to-top" href="#top"><small>Back to top</small></a></li>
-      </ul>
-    </nav>
-    </div>
-    <div class="navbar navbar-default navbar-fixed-top hidden-md hidden-lg hidden-print">
-      <button type="button" class="navbar-toggle" data-toggle="offcanvas" data-target=".navmenu">
-        <span class="icon-bar"></span>
-        <span class="icon-bar"></span>
-        <span class="icon-bar"></span>
-      </button>
-      <a class="navbar-brand" href="#">$($ModName)</a>
-    </div>
-    <div class="container">
-      <div class="page-content">
-        <!-- About $($ModName) -->
-        <h1 id="About" class="page-header">About $($ModName)</h1>
-        <div class="row">
-          <div class="col-md-4 col-xs-4">
-            Description<br>
-            ModuleBase<br>
-            Version<br>
-            Author<br>
-            CompanyName<br>
-            Copyright
-          </div>
-          <div class="col-md-6 col-xs-6">
-            $([System.Web.HttpUtility]::HtmlEncode($moduleData.Description))<br>
-            $([System.Web.HttpUtility]::HtmlEncode($moduleData.ModuleBase))<br>
-            $([System.Web.HttpUtility]::HtmlEncode($moduleData.Version))<br>
-            $([System.Web.HttpUtility]::HtmlEncode($moduleData.Author))<br>
-            $([System.Web.HttpUtility]::HtmlEncode($moduleData.CompanyName))<br>
-            $([System.Web.HttpUtility]::HtmlEncode($moduleData.Copyright))
-          </div>
-        </div>
-        <br>
-        <!-- End About -->
-
-"@ ; 
-#>
-
+                # orig, had no table, the metadata didn't line up with the fields
                 # subbed the above into a table that puts them in key:value
                 $html += @"
         <li><a class="back-to-top" href="#top"><small>Back to top</small></a></li>
@@ -522,6 +509,38 @@ function Convert-HelpToHtmlFile {
                 # loop through the commands again to build the main content
                 foreach($command in $moduleCommands) {
                     $commandHelp = Get-Help $command ; 
+
+                    # platyps markdownhelp
+                    if($MarkdownHelp){
+                        $meta = @{
+                            'layout' = 'pshelp';
+                            #'author' = 'tto';
+                            Author = $null # $moduleData.Author ; 
+                            'title' = $null #$($commandHelp.Name);
+                            #'category' = $($commandHelp.ModuleName.ToLower());
+                            category = $null ; 
+                            'excerpt' = $null # "`"$($commandHelp.Synopsis)`"";
+                            'date' = $(Get-Date -Format yyyy-MM-dd);
+                            'redirect_from' = $null #"[`"/PowerShell/$($commandHelp.ModuleName)/$($commandHelp.Name)/`", `"/PowerShell/$($commandHelp.ModuleName)/$($commandHelp.Name.ToLower())/`", `"/PowerShell/$($commandHelp.Name.ToLower())/`"]" ; 
+                        } ; 
+                        if($moduleData.Author){$meta.Author = $moduleData.Author} ; 
+                        if($commandHelp.Name){$meta.title = $commandHelp.Name} ; 
+                        if($commandHelp.ModuleName){
+                            $meta.category = $($commandHelp.ModuleName.ToLower()) ; 
+                            $meta.'redirect_from' = "[`"/PowerShell/$($commandHelp.ModuleName)/$($commandHelp.Name)/`", `"/PowerShell/$($commandHelp.ModuleName)/$($commandHelp.Name.ToLower())/`", `"/PowerShell/$($commandHelp.Name.ToLower())/`"]" ; 
+                        } ; 
+                        if($commandHelp.Synopsis){$meta.excerpt = "`"$($commandHelp.Synopsis)`""} ; 
+                        if($moduleData.Author){$meta.Author = $moduleData.Author} ; 
+
+
+                        if($commandHelp.Synopsis -notmatch "\[|\]") {
+                            #New-MarkdownHelp -Command $command -OutputFolder (join-path -path $Destination -childpath '\_OnlineHelp\a') -Metadata $meta -Force ; 
+                            New-MarkdownHelp -Command $command -OutputFolder $outmd -Metadata $meta -Force ; 
+                        } ;     
+                    } ;
+
+
+
                     $html += @"
         <!-- $($command) -->
         <div class="panel panel-default">
@@ -617,21 +636,8 @@ function Convert-HelpToHtmlFile {
 "@ ; 
                     } ; 
 
-                    <# orig, notes were unwrapped
-                    $html += @"
-            <h3 id="$($command)-RelatedLinks">RelatedLinks</h3>
-            <p><a href="$([System.Web.HttpUtility]::HtmlEncode($commandHelp.relatedLinks.navigationLink.uri -join ''))">$([System.Web.HttpUtility]::HtmlEncode($commandHelp.relatedLinks.navigationLink.uri -join ''))</a></p>
-            <h3 id="$($command)-Notes">Notes</h3>
-            <p>$([System.Web.HttpUtility]::HtmlEncode($commandHelp.alertSet.alert.text -join [System.Environment]::NewLine) -replace([System.Environment]::NewLine, '<br>'))</p>
-            <br>
-          </div>
-        </div>
-        <!-- End ConvertFrom-HexIP -->
-
-"@ ; 
-#>
-
-                    # notes/.alertSet.alert.text is one big unwrapped block the line wrap above isn't working 
+                    # orig, notes were unwrapped
+                    # notes/.alertSet.alert.text was one big unwrapped block the line wrap above wasn't  working; revised to target 3 variants of crlfs
                     $html += @"
             <h3 id="$($command)-RelatedLinks">RelatedLinks</h3>
             <p><a href="$([System.Web.HttpUtility]::HtmlEncode($commandHelp.relatedLinks.navigationLink.uri -join ''))">$([System.Web.HttpUtility]::HtmlEncode($commandHelp.relatedLinks.navigationLink.uri -join ''))</a></p>
@@ -665,41 +671,6 @@ function Convert-HelpToHtmlFile {
 '@ ; 
 
                 Write-Verbose 'Generated HTML OK' ; 
-
-                # if $modName is pathed, split it to the leaf
-                if( (split-path $modName -ea 0) -OR ([uri]$modName).isfile){
-                    write-verbose "converting pathed $($modname) to leaf..." ; 
-                    #$leafFilename = split-path $modname -leaf ; 
-                    $leaffilename = (get-childitem -path $modname).basename ; 
-                } else {
-                    $leafFilename = $modname ; 
-                }; 
-
-                #if(test-path -path $Destination -PathType container -ErrorAction SilentlyContinue){
-                # test-path has a registry differentiating issue, safer to use gi!
-                if( (get-item -path $Destination -ea 0).PSIsContainer){
-                    $smsg = "-Destination specified - $($Destination) - is a container" ; 
-                    $smsg += "`nconstructing output file as 'Name' $($leafFilename )_HELP.html..." ; 
-                    write-host -ForegroundColor Yellow $smsg ; 
-                    [System.IO.DirectoryInfo[]]$Destination = $Destination ; 
-                    [system.io.fileinfo]$ofile = join-path -path $Destination.fullname -ChildPath "$($leafFilename)_HELP.html" ; 
-                #}elseif(test-path -path $Destination -PathType Leaf -ErrorAction SilentlyContinue){
-                }elseif( -not (get-item -path $Destination -ea 0).PSIsContainer){
-                    [system.io.fileinfo]$Destination = $Destination ; 
-                    if($Destination.extension -eq '.html'){
-                        [system.io.fileinfo]$ofile = $Destination ; 
-                    } else { 
-                        throw "$($Destination) does *not* appear to have a suitable extension (.html):$($Destination.extension)" ; 
-                    } ; 
-                } else{
-                    # not an existing dir (target) & not an existing file, so treat it as a full path
-                    if($Destination.extension -eq 'html'){
-                        [system.io.fileinfo]$ofile = $Destination ; 
-                    } else { 
-                        throw "$($Destination) does *not* appear to have a suitable extension (.html):$($Destination.extension)" ; 
-                    } ; 
-                } ; 
-                write-host -ForegroundColor Yellow "Out-File -FilePath $($Ofile) -Encoding 'UTF8'" ; 
 
                 # write html file
                 $html | Out-File -FilePath $ofile.fullname -Force -Encoding 'UTF8' ; 
